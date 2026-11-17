@@ -13,6 +13,14 @@ on:
         description: "Pfade für Vitest, mit Leerzeichen getrennt; leer = alle Tests"
         required: false
         default: ""
+      build:
+        description: "Auch bun run build"
+        type: boolean
+        default: false
+      doku:
+        description: "Auch die Doku bauen (zensical build --strict, wie docs.yml)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,11 +78,34 @@ jobs:
         # TESTS bewusst ohne Anführungszeichen: mehrere Pfade, mit Leerzeichen getrennt
         run: bun --bun vitest run $TESTS
 
+      - name: Build
+        id: build
+        if: ${{ inputs.build }}
+        continue-on-error: true
+        run: bun run build
+
+      - uses: actions/setup-python@v7
+        if: ${{ inputs.doku }}
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - name: Doku
+        id: doku
+        if: ${{ inputs.doku }}
+        continue-on-error: true
+        run: |
+          pip install -q -r requirements-docs.txt
+          zensical build --strict
+
       - name: Ergebnis
         env:
           LINT: ${{ steps.lint.outcome }}
           TYPECHECK: ${{ steps.typecheck.outcome }}
           TESTS: ${{ steps.tests.outcome }}
+          BUILD: ${{ steps.build.outcome || 'skipped' }}
+          DOKU: ${{ steps.doku.outcome || 'skipped' }}
         run: |
-          echo "Lint: $LINT   Typecheck: $TYPECHECK   Tests: $TESTS"
+          echo "Lint: $LINT   Typecheck: $TYPECHECK   Tests: $TESTS   Build: $BUILD   Doku: $DOKU"
           test "$LINT" = success && test "$TYPECHECK" = success && test "$TESTS" = success
+          test "$BUILD" != failure && test "$DOKU" != failure
