@@ -33,6 +33,7 @@ es dort gemergt ist.
 | `hostmint-abgleich.yml` | täglich 02:41 UTC, oder von Hand | spult `main` auf upstream vor, führt upstream in `hostmint` zusammen; Konflikt → Issue mit Label `hostmint-abgleich` |
 | `hostmint-ci.yml` | bei jedem Push auf `hostmint` | ruft die unveränderte `ci.yml` von upstream auf; rot → Issue mit Label `hostmint-ci` |
 | `ci.yml` (upstream) | bei jedem Push auf `main` | zeigt, ob upstream selbst grün ist |
+| `hostmint-pruefen.yml` | von Hand, mit Branch und Testpfaden | Lint, Typecheck und ausgewählte Tests eines Feature-Branches, bevor er als Pull Request nach upstream geht; zeigt bei Lint-Fehlern den Formatierungs-Diff von Biome |
 
 Läuft `ci.yml` auf `main` grün und `hostmint-ci.yml` rot, liegt es an unserem Patch-Satz.
 
