@@ -1,0 +1,51 @@
+name: Hostmint CI
+
+# Prüft jeden neuen Stand von hostmint mit der unveränderten Prüfung von upstream (ci.yml per workflow_call).
+# Läuft dieselbe Prüfung auf main grün und hier rot, liegt es an unserem Patch-Satz, nicht an upstream.
+on:
+  push:
+    branches: [hostmint]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hostmint-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    # ci.yml braucht nicht mehr: Lesen des Codes und des Build-Caches
+    permissions:
+      contents: read
+      packages: read
+
+  meldung:
+    needs: ci
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Issue anlegen oder ergänzen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LAUF: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STAND: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh label create hostmint-ci --color B60205 --description "Prüfung von hostmint fehlgeschlagen" -R "$REPO" 2>/dev/null || true
+          text="Die Prüfung von \`hostmint\` auf ${STAND:0:8} ist fehlgeschlagen: $LAUF
+
+          Erst nachsehen, ob dieselbe Prüfung auf \`main\` (reiner upstream-Stand) ebenfalls rot ist. Dann liegt es an upstream, und ein Issue dort genügt. Ist nur \`hostmint\` rot, liegt es an unserem Patch-Satz.
+
+          Nicht ausrollen, bis ein Lauf wieder grün ist."
+          nr="$(gh issue list -R "$REPO" --label hostmint-ci --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$nr" ]; then
+            gh issue comment "$nr" -R "$REPO" --body "$text"
+          else
+            gh issue create -R "$REPO" --label hostmint-ci --title "Prüfung von hostmint fehlgeschlagen" --body "$text"
+          fi

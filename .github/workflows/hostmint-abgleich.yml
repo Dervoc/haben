@@ -1,0 +1,99 @@
+name: Hostmint Abgleich mit upstream
+
+# Jede Nacht: main auf den Stand von upstream vorspulen und upstream in hostmint zusammenführen.
+# Der Push nach hostmint startet hostmint-ci.yml, die den zusammengeführten Stand mit der Prüfung von upstream testet.
+# Ein Konflikt wird nicht automatisch aufgelöst, sondern als Issue gemeldet.
+#
+# Braucht das Secret ABGLEICH_TOKEN: ein fine-grained Token nur für dieses Repository mit Contents und Workflows
+# (je Lesen und Schreiben). Mit dem eingebauten GITHUB_TOKEN geht es nicht: Er darf keine Dateien unter
+# .github/workflows ändern, und upstream ändert seine Workflows regelmäßig. Pushes mit GITHUB_TOKEN würden außerdem
+# keine weiteren Workflows starten, die Prüfung bliebe also aus.
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hostmint-abgleich
+  cancel-in-progress: false
+
+jobs:
+  abgleich:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Token vorhanden?
+        env:
+          ABGLEICH_TOKEN: ${{ secrets.ABGLEICH_TOKEN }}
+        run: |
+          if [ -z "$ABGLEICH_TOKEN" ]; then
+            echo "::error::Secret ABGLEICH_TOKEN fehlt. Anleitung: .github/hostmint/README.md, Abschnitt Token."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: hostmint
+          fetch-depth: 0
+          token: ${{ secrets.ABGLEICH_TOKEN }}
+
+      - name: Upstream holen und main spiegeln
+        run: |
+          set -euo pipefail
+          git config user.name "hostmint-abgleich"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/firsttris/haben.git
+          git fetch --no-tags upstream main
+          # main ist ein reiner Spiegel: nur vorspulen. Hat jemand auf main committet, schlägt das fehl, und das ist gewollt.
+          git push origin refs/remotes/upstream/main:refs/heads/main
+
+      - name: Upstream in hostmint zusammenführen
+        id: merge
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Nichts Neues von upstream."
+            exit 0
+          fi
+          if ! git merge --no-edit -m "Abgleich mit upstream $(git rev-parse --short upstream/main)" upstream/main; then
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/konflikte.txt"
+            git merge --abort
+            echo "konflikt=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          git push origin HEAD:hostmint
+
+      - name: Issue anlegen oder ergänzen
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LAUF: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          KONFLIKT: ${{ steps.merge.outputs.konflikt }}
+        run: |
+          set -euo pipefail
+          gh label create hostmint-abgleich --color D93F0B --description "Abgleich mit upstream fehlgeschlagen" -R "$REPO" 2>/dev/null || true
+          if [ "$KONFLIKT" = "true" ]; then
+            dateien="$(sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/konflikte.txt")"
+            text="Upstream lässt sich nicht automatisch in \`hostmint\` zusammenführen: $LAUF
+
+          Konflikte in:
+          $dateien
+
+          Von Hand auflösen: \`git fetch upstream && git switch hostmint && git merge upstream/main\`, Konflikte lösen, pushen. Ein Konflikt heißt meist, dass ein Teil unseres Patch-Satzes inzwischen upstream gelandet oder dort anders gelöst ist. Dann den eigenen Teil entfernen statt zusammenzuflicken."
+          else
+            text="Der Abgleich mit upstream ist fehlgeschlagen: $LAUF
+
+          Häufigste Ursachen: Secret \`ABGLEICH_TOKEN\` fehlt oder ist abgelaufen, oder auf \`main\` wurde committet (main ist ein reiner Spiegel und darf nur vorgespult werden)."
+          fi
+          nr="$(gh issue list -R "$REPO" --label hostmint-abgleich --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$nr" ]; then
+            gh issue comment "$nr" -R "$REPO" --body "$text"
+          else
+            gh issue create -R "$REPO" --label hostmint-abgleich --title "Abgleich mit upstream fehlgeschlagen" --body "$text"
+          fi
